@@ -1,36 +1,31 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
+  BookOpen,
+  CheckCircle2,
+  ChevronRight,
+  Download,
+  FileCode,
+  FolderTree,
+  LayoutDashboard,
+  Plus,
+  Printer,
+  RefreshCw,
   ShieldAlert,
   ShieldCheck,
-  Shield,
-  FileCode,
-  CheckCircle2,
-  AlertTriangle,
-  XCircle,
-  Download,
-  Printer,
-  Search,
-  Code2,
-  Users,
-  CreditCard,
-  Settings,
-  Plus,
-  Play,
-  RotateCcw,
   Sparkles,
-  ExternalLink,
-  ChevronRight,
-  Layers,
   Terminal,
-  FileText,
-  Lock,
-  Cpu,
-  BarChart3,
-  BookOpen
+  UploadCloud,
 } from 'lucide-react';
 
-// Types
 type RuleSeverity = 'Critical' | 'High' | 'Medium' | 'Low';
+type ActiveView = 'workbench' | 'blueprint' | 'repository' | 'rules';
+
+interface RepositoryFile {
+  id: string;
+  path: string;
+  language: string;
+  content: string;
+}
 
 interface Vulnerability {
   id: string;
@@ -39,10 +34,18 @@ interface Vulnerability {
   severity: RuleSeverity;
   penaltyPoints: number;
   description: string;
+  filePath: string;
   lineNumber: number;
   codeSnippet: string;
   remediation: string;
   executiveImpact: string;
+}
+
+interface RepositoryBlueprint {
+  summary: string;
+  architectureNotes: string[];
+  priorityPlan: string[];
+  repositoryMap: Array<{ path: string; language: string; lines: number; findings: number }>;
 }
 
 interface AuditReport {
@@ -54,645 +57,224 @@ interface AuditReport {
   vulnerabilities: Vulnerability[];
   scannedLines: number;
   rulesChecked: number;
+  blueprint: RepositoryBlueprint;
 }
 
-interface Project {
-  id: string;
-  name: string;
-  language: string;
-  lastAuditScore: number;
-  lastAuditDate: string;
-  status: 'Clean' | 'Warning' | 'Critical';
-  vulnerabilitiesCount: number;
-}
-
-// OWASP & Security Rules
 const RULES_CATALOG = [
   { id: 'OWASP-R01', name: 'SQL Injection (SQLi)', category: 'Injection', penalty: 25, defaultSeverity: 'Critical' as RuleSeverity },
   { id: 'OWASP-R02', name: 'Broken Authentication', category: 'Auth', penalty: 20, defaultSeverity: 'Critical' as RuleSeverity },
   { id: 'OWASP-R03', name: 'Sensitive Data Exposure', category: 'Cryptography', penalty: 15, defaultSeverity: 'High' as RuleSeverity },
-  { id: 'OWASP-R04', name: 'XML External Entities (XXE)', category: 'Parser', penalty: 15, defaultSeverity: 'High' as RuleSeverity },
   { id: 'OWASP-R05', name: 'Broken Access Control', category: 'AuthZ', penalty: 20, defaultSeverity: 'Critical' as RuleSeverity },
   { id: 'OWASP-R06', name: 'Cross-Site Scripting (XSS)', category: 'Input Sanitization', penalty: 15, defaultSeverity: 'High' as RuleSeverity },
   { id: 'CTF-R07', name: 'TOCTOU Race Condition', category: 'Concurrency', penalty: 20, defaultSeverity: 'Critical' as RuleSeverity },
-  { id: 'CTF-R08', name: 'Asynchronous State Desync', category: 'Concurrency', penalty: 15, defaultSeverity: 'High' as RuleSeverity },
-  { id: 'OWASP-R09', name: 'Insecure Deserialization', category: 'Object Injection', penalty: 15, defaultSeverity: 'High' as RuleSeverity },
   { id: 'OWASP-R10', name: 'Insufficient Logging & Monitoring', category: 'Observability', penalty: 10, defaultSeverity: 'Medium' as RuleSeverity }
 ];
 
-const INITIAL_PROJECTS: Project[] = [
-  { id: 'p1', name: 'Fintech Payment Gateway API', language: 'TypeScript / Node.js', lastAuditScore: 65, lastAuditDate: '2026-08-12', status: 'Warning', vulnerabilitiesCount: 3 },
-  { id: 'p2', name: 'E-Commerce Auth Microservice', language: 'Python / FastApi', lastAuditScore: 92, lastAuditDate: '2026-08-10', status: 'Clean', vulnerabilitiesCount: 1 },
-  { id: 'p3', name: 'Healthcare Patient Portal', language: 'Java / Spring Boot', lastAuditScore: 40, lastAuditDate: '2026-08-08', status: 'Critical', vulnerabilitiesCount: 5 }
+const SAMPLE_REPOSITORY: RepositoryFile[] = [
+  {
+    id: 'file-1',
+    path: 'src/routes/auth.ts',
+    language: 'TypeScript',
+    content: `import express from 'express';
+import db from '../db/connection';
+
+const router = express.Router();
+const JWT_SECRET = "sk_live_9918239018230912389102";
+
+router.post('/login', async (req, res) => {
+  const email = req.body.email;
+  const query = ` + '`SELECT * FROM users WHERE email = \'${email}\'`' + `;
+  const result = await db.query(query);
+
+  if (result.rows[0].password_md5 === req.body.password) {
+    res.json({ token: JWT_SECRET, user: result.rows[0] });
+  } else {
+    res.status(401).json({ error: 'E-mail não encontrado' });
+  }
+});`
+  },
+  {
+    id: 'file-2',
+    path: 'src/controllers/checkout.ts',
+    language: 'TypeScript',
+    content: `export async function checkout(req, res, db) {
+  const { userId, amount } = req.body;
+  const user = await db.query(` + '`SELECT credits FROM users WHERE id = ${userId}`' + `);
+
+  if (user.rows[0].credits >= amount) {
+    await processPayment(userId, amount);
+    await db.query(` + '`UPDATE users SET credits = credits - ${amount} WHERE id = ${userId}`' + `);
+    res.json({ success: true });
+  }
+}`
+  }
 ];
 
-const DEFAULT_SAMPLE_CODE = `// Sample Node.js Express Authentication & Data Endpoint
-const express = require('express');
-const mysql = require('mysql');
-const app = express();
+const severityStyles: Record<RuleSeverity, string> = {
+  Critical: 'bg-rose-500/10 text-rose-300 ring-rose-400/30',
+  High: 'bg-amber-500/10 text-amber-300 ring-amber-400/30',
+  Medium: 'bg-yellow-500/10 text-yellow-300 ring-yellow-400/30',
+  Low: 'bg-sky-500/10 text-sky-300 ring-sky-400/30'
+};
 
-const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'admin',
-  password: 'HardcodedSecretPassword123!', // SENSITIVE DATA EXPOSURE
-  database: 'production_db'
-});
-
-// User Search Endpoint
-app.get('/api/users/search', (req, res) => {
-  const username = req.query.username;
-  // Unsanitized Raw SQL Query - SQL INJECTION
-  const query = "SELECT id, username, email, role, api_key FROM users WHERE username = '" + username + "'";
-  
-  db.query(query, (err, results) => {
-    if (err) throw err;
-    res.json(results);
-  });
-});
-
-// Transfer Funds Endpoint (TOCTOU Race Condition)
-let userBalance = 500;
-app.post('/api/transfer', async (req, res) => {
-  const amount = req.body.amount;
-  // Check balance before deduction without transaction lock
-  if (userBalance >= amount) {
-    await new Promise(resolve => setTimeout(resolve, 100)); // Simulate async delay
-    userBalance -= amount;
-    res.json({ success: true, newBalance: userBalance });
-  } else {
-    res.status(400).json({ error: 'Insufficient funds' });
-  }
-});
-`;
+const detectLanguage = (path: string) => {
+  if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'TypeScript';
+  if (path.endsWith('.js') || path.endsWith('.jsx')) return 'JavaScript';
+  if (path.endsWith('.sql')) return 'SQL';
+  if (path.endsWith('.py')) return 'Python';
+  if (path.endsWith('.java')) return 'Java';
+  return 'Texto';
+};
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'audit' | 'projects' | 'catalog' | 'team'>('audit');
-  const [code, setCode] = useState<string>(DEFAULT_SAMPLE_CODE);
-  const [projectName, setProjectName] = useState<string>('My Secure API Module');
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-  const [nonTechnicalMode, setNonTechnicalMode] = useState<boolean>(false);
-  const [selectedSeverity, setSelectedSeverity] = useState<string>('All');
+  const [activeView, setActiveView] = useState<ActiveView>('workbench');
+  const [projectName, setProjectName] = useState('CodeSentinel Repository Audit');
+  const [files, setFiles] = useState<RepositoryFile[]>(SAMPLE_REPOSITORY);
+  const [activeFileId, setActiveFileId] = useState(SAMPLE_REPOSITORY[0].id);
+  const [newFilePath, setNewFilePath] = useState('src/new-module.ts');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [selectedSeverity, setSelectedSeverity] = useState('All');
   const [report, setReport] = useState<AuditReport | null>(null);
-  const [credits, setCredits] = useState<number>(42);
 
-  // Static Audit Rule Matching Engine
+  const activeFile = files.find(file => file.id === activeFileId) || files[0];
+  const totalLines = useMemo(() => files.reduce((total, file) => total + file.content.split('\n').length, 0), [files]);
+
+  const updateActiveFile = (content: string) => {
+    setFiles(current => current.map(file => file.id === activeFile.id ? { ...file, content } : file));
+  };
+
+  const addRepositoryFile = () => {
+    const path = newFilePath.trim() || `src/module-${files.length + 1}.ts`;
+    const file: RepositoryFile = { id: `file-${Date.now()}`, path, language: detectLanguage(path), content: '// Cole aqui o código deste arquivo do repositório' };
+    setFiles(current => [...current, file]);
+    setActiveFileId(file.id);
+    setNewFilePath('');
+  };
+
   const handleRunAudit = () => {
     setIsAnalyzing(true);
     setTimeout(() => {
-      const lines = code.split('\n');
       const vulnerabilities: Vulnerability[] = [];
       let currentId = 1;
 
-      lines.forEach((line, index) => {
-        const lineNum = index + 1;
-        const lower = line.toLowerCase();
+      files.forEach(file => {
+        file.content.split('\n').forEach((line, index) => {
+          const lower = line.toLowerCase();
+          const base = { filePath: file.path, lineNumber: index + 1, codeSnippet: line.trim() };
 
-        // Rule 1: SQL Injection
-        if (
-          (lower.includes('select ') || lower.includes('insert ') || lower.includes('update ') || lower.includes('delete ')) &&
-          (line.includes(" + ") || line.includes("+'") || line.includes('${') || line.includes('"+'))
-        ) {
-          vulnerabilities.push({
-            id: `VULN-${currentId++}`,
-            ruleId: 'OWASP-R01',
-            title: 'SQL Injection Vulnerability Detected',
-            severity: 'Critical',
-            penaltyPoints: 25,
-            description: 'Direct string concatenation detected inside raw database queries. Attackers can execute arbitrary SQL statements.',
-            lineNumber: lineNum,
-            codeSnippet: line.trim(),
-            remediation: 'Use parameterized queries or prepared statements (e.g. db.query("SELECT * FROM users WHERE username = ?", [username])).',
-            executiveImpact: 'Alto risco de vazamento massivo de dados de clientes, violação da LGPD e comprometimento de acesso administrativo.'
-          });
-        }
+          if ((lower.includes('select ') || lower.includes('update ') || lower.includes('delete ') || lower.includes('insert ')) && (line.includes('${') || line.includes(' + ') || line.includes("+'") || line.includes('"+'))) {
+            vulnerabilities.push({ ...base, id: `VULN-${currentId++}`, ruleId: 'OWASP-R01', title: 'SQL Injection por query dinâmica', severity: 'Critical', penaltyPoints: 25, description: 'Query construída com interpolação ou concatenação de entrada externa.', remediation: 'Troque por prepared statements e parâmetros vinculados no driver do banco.', executiveImpact: 'Pode expor dados sensíveis, permitir fraude e bloquear conformidade LGPD.' });
+          }
 
-        // Rule 2: Sensitive Data Exposure (Hardcoded secrets)
-        if (
-          (lower.includes('password') || lower.includes('secret') || lower.includes('api_key') || lower.includes('token')) &&
-          (line.includes("=") || line.includes(":")) &&
-          (line.includes("'") || line.includes('"')) &&
-          !lower.includes('process.env')
-        ) {
-          vulnerabilities.push({
-            id: `VULN-${currentId++}`,
-            ruleId: 'OWASP-R03',
-            title: 'Hardcoded Sensitive Secret',
-            severity: 'High',
-            penaltyPoints: 15,
-            description: 'Hardcoded credentials or API keys embedded in source code.',
-            lineNumber: lineNum,
-            codeSnippet: line.trim(),
-            remediation: 'Move all secrets to environment variables accessed via process.env.',
-            executiveImpact: 'Risco de credenciais vazadas em repositórios públicos ou compilações de produção.'
-          });
-        }
+          if ((lower.includes('password') || lower.includes('secret') || lower.includes('api_key') || lower.includes('token')) && (line.includes('=') || line.includes(':')) && (line.includes('"') || line.includes("'")) && !lower.includes('process.env')) {
+            vulnerabilities.push({ ...base, id: `VULN-${currentId++}`, ruleId: 'OWASP-R03', title: 'Segredo sensível hardcoded', severity: 'High', penaltyPoints: 15, description: 'Credencial, token ou segredo estático embutido no código.', remediation: 'Mover segredos para variáveis de ambiente ou vault com rotação.', executiveImpact: 'Vazamento de credenciais em commits, builds ou logs pode comprometer produção.' });
+          }
 
-        // Rule 3: TOCTOU / Concurrency Race Condition
-        if (lower.includes('if (') && (lower.includes('balance') || lower.includes('stock') || lower.includes('amount') || lower.includes('limit'))) {
-          vulnerabilities.push({
-            id: `VULN-${currentId++}`,
-            ruleId: 'CTF-R07',
-            title: 'Race Condition (TOCTOU)',
-            severity: 'Critical',
-            penaltyPoints: 20,
-            description: 'State check performed before state update without row locking or atomic transactions.',
-            lineNumber: lineNum,
-            codeSnippet: line.trim(),
-            remediation: 'Use database transactions with FOR UPDATE locks or atomic operators (e.g., balance = balance - amount WHERE balance >= amount).',
-            executiveImpact: 'Risco de ataques de saldo duplo ou estouro de cota por requisições concorrentes paralelas.'
-          });
-        }
+          if (lower.includes('if (') && (lower.includes('balance') || lower.includes('credits') || lower.includes('stock') || lower.includes('amount'))) {
+            vulnerabilities.push({ ...base, id: `VULN-${currentId++}`, ruleId: 'CTF-R07', title: 'Race condition TOCTOU', severity: 'Critical', penaltyPoints: 20, description: 'Estado financeiro ou cota é verificado antes de ser atualizado sem transação atômica.', remediation: 'Use transações, lock pessimista ou update condicional atômico.', executiveImpact: 'Pode gerar saldo duplicado, cobrança incorreta ou abuso por requisições concorrentes.' });
+          }
+        });
       });
 
-      // Calculate Score
       const totalPenalty = vulnerabilities.reduce((acc, curr) => acc + curr.penaltyPoints, 0);
-      const finalScore = Math.max(0, 100 - totalPenalty);
-
-      let grade: 'A' | 'B' | 'C' | 'D' | 'F' = 'A';
-      if (finalScore < 50) grade = 'F';
-      else if (finalScore < 65) grade = 'D';
-      else if (finalScore < 80) grade = 'C';
-      else if (finalScore < 90) grade = 'B';
-
-      const hasCritical = vulnerabilities.some(v => v.severity === 'Critical');
+      const score = Math.max(0, 100 - totalPenalty);
+      const grade = score < 50 ? 'F' : score < 65 ? 'D' : score < 80 ? 'C' : score < 90 ? 'B' : 'A';
+      const repositoryMap = files.map(file => ({ path: file.path, language: file.language, lines: file.content.split('\n').length, findings: vulnerabilities.filter(v => v.filePath === file.path).length }));
 
       setReport({
-        projectName: projectName || 'Projeto sem Nome',
+        projectName,
         timestamp: new Date().toLocaleString('pt-BR'),
-        score: finalScore,
+        score,
         grade,
-        readinessBlocker: hasCritical || finalScore < 70,
+        readinessBlocker: vulnerabilities.some(v => v.severity === 'Critical') || score < 70,
         vulnerabilities,
-        scannedLines: lines.length,
-        rulesChecked: RULES_CATALOG.length
+        scannedLines: totalLines,
+        rulesChecked: RULES_CATALOG.length,
+        blueprint: {
+          summary: `Foram lidos ${files.length} arquivos do repositório, somando ${totalLines} linhas analisadas contra ${RULES_CATALOG.length} regras.`,
+          architectureNotes: ['Centralizar acesso a dados em camada de repositories com queries parametrizadas.', 'Isolar segredos em vault/ambiente e impedir commit via secret scanning.', 'Proteger fluxos financeiros com transações e locks no banco.'],
+          priorityPlan: ['Corrigir falhas críticas antes de qualquer deploy.', 'Adicionar testes automatizados de regressão para cada finding.', 'Executar re-scan e exportar blueprint como artefato de release.'],
+          repositoryMap
+        }
       });
-
-      setCredits(prev => Math.max(0, prev - 1));
+      setActiveView('blueprint');
       setIsAnalyzing(false);
-    }, 600);
+    }, 650);
   };
 
   const filteredVulnerabilities = useMemo(() => {
     if (!report) return [];
-    if (selectedSeverity === 'All') return report.vulnerabilities;
-    return report.vulnerabilities.filter(v => v.severity === selectedSeverity);
+    return selectedSeverity === 'All' ? report.vulnerabilities : report.vulnerabilities.filter(v => v.severity === selectedSeverity);
   }, [report, selectedSeverity]);
 
-  const handleExportMarkdown = () => {
+  const exportBlueprint = () => {
     if (!report) return;
-    let md = `# Relatório de Auditoria de Segurança - ${report.projectName}\n`;
-    md += `**Data:** ${report.timestamp}\n`;
-    md += `**Pontuação de Segurança:** ${report.score}/100 (Nota: ${report.grade})\n`;
-    md += `**Status de Produção:** ${report.readinessBlocker ? 'BLOQUEADO PARA DEPLOY' : 'APROVADO'}\n\n`;
-    md += `## Vulnerabilidades Encontradas (${report.vulnerabilities.length})\n\n`;
-
-    report.vulnerabilities.forEach(v => {
-      md += `### [${v.severity.toUpperCase()}] ${v.title} (${v.id})\n`;
-      md += `- **Regra:** ${v.ruleId}\n`;
-      md += `- **Linha:** ${v.lineNumber}\n`;
-      md += `- **Impacto Executivo:** ${v.executiveImpact}\n`;
-      md += `- **Código Atingido:** \`${v.codeSnippet}\`\n`;
-      md += `- **Remediação Recomendada:** ${v.remediation}\n\n`;
-    });
-
+    const md = [`# Blueprint de Segurança - ${report.projectName}`, `Data: ${report.timestamp}`, `Score: ${report.score}/100 (${report.grade})`, '', '## Mapa do repositório', ...report.blueprint.repositoryMap.map(file => `- ${file.path}: ${file.lines} linhas, ${file.findings} finding(s)`), '', '## Plano prioritário', ...report.blueprint.priorityPlan.map((item, index) => `${index + 1}. ${item}`), '', '## Findings', ...report.vulnerabilities.map(v => `### ${v.id} ${v.title}\n- Severidade: ${v.severity}\n- Local: ${v.filePath}:${v.lineNumber}\n- Correção: ${v.remediation}`)].join('\n');
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `secaudit-${report.projectName.toLowerCase().replace(/\s+/g, '-')}.md`;
+    a.download = `blueprint-${report.projectName.toLowerCase().replace(/\s+/g, '-')}.md`;
     a.click();
   };
 
+  const navItems = [
+    { id: 'workbench' as ActiveView, label: 'Workbench', icon: LayoutDashboard },
+    { id: 'blueprint' as ActiveView, label: 'Blueprint', icon: FileCode },
+    { id: 'repository' as ActiveView, label: 'Repositório', icon: FolderTree },
+    { id: 'rules' as ActiveView, label: 'Regras', icon: BookOpen }
+  ];
+
   return (
-    <div id="app-root" className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col antialiased">
-      {/* Top Navbar */}
-      <header id="main-header" className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50">
-        <div id="header-container" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div id="brand-logo" className="flex items-center gap-3">
-            <div id="logo-icon-bg" className="h-10 w-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
-              <ShieldCheck className="h-6 w-6 text-white" />
-            </div>
-            <div>
-              <span id="brand-title" className="font-bold text-lg text-white tracking-wide block">SecAudit Pro</span>
-              <span id="brand-subtitle" className="text-xs text-slate-400 block -mt-1">SAST & Security Blueprints</span>
-            </div>
+    <div className="min-h-screen bg-[#070b12] text-slate-100 antialiased">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_32%),radial-gradient(circle_at_80%_10%,rgba(59,130,246,0.12),transparent_28%)]" />
+      <div className="relative flex min-h-screen">
+        <aside className="hidden lg:flex w-72 shrink-0 flex-col border-r border-white/10 bg-slate-950/70 p-5 backdrop-blur-xl">
+          <div className="flex items-center gap-3 pb-8">
+            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/20"><ShieldCheck /></div>
+            <div><div className="font-black tracking-tight">CodeSentinel</div><div className="text-xs text-slate-500">Repository SAST Blueprint</div></div>
           </div>
-
-          {/* Navigation Tabs */}
-          <nav id="navigation-bar" className="hidden md:flex items-center gap-1 bg-slate-950/60 p-1.5 rounded-xl border border-slate-800">
-            <button
-              id="tab-audit-btn"
-              onClick={() => setActiveTab('audit')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'audit'
-                  ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <Code2 className="h-4 w-4" />
-              Auditoria de Código
-            </button>
-            <button
-              id="tab-projects-btn"
-              onClick={() => setActiveTab('projects')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'projects'
-                  ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <Layers className="h-4 w-4" />
-              Projetos & Histórico
-            </button>
-            <button
-              id="tab-catalog-btn"
-              onClick={() => setActiveTab('catalog')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === 'catalog'
-                  ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <BookOpen className="h-4 w-4" />
-              Catálogo de Regras
-            </button>
+          <nav className="space-y-2">
+            {navItems.map(item => <button key={item.id} onClick={() => setActiveView(item.id)} className={`w-full flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${activeView === item.id ? 'bg-white text-slate-950' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}><item.icon className="h-4 w-4" />{item.label}<ChevronRight className="ml-auto h-4 w-4" /></button>)}
           </nav>
+          <div className="mt-auto rounded-3xl border border-cyan-400/20 bg-cyan-400/10 p-4"><Sparkles className="mb-3 h-5 w-5 text-cyan-300" /><p className="text-sm font-bold">Análise multi-arquivo</p><p className="mt-1 text-xs leading-5 text-slate-400">Adicione código proveniente do repositório, leia todos os arquivos enviados e gere um blueprint acionável.</p></div>
+        </aside>
 
-          {/* Account & Credits Indicator */}
-          <div id="account-status-bar" className="flex items-center gap-4">
-            <div id="credits-chip" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs">
-              <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
-              <span className="text-slate-400">Créditos:</span>
-              <span className="font-semibold text-cyan-300">{credits} análises</span>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8">
+          <header className="mb-8 flex flex-col gap-4 rounded-3xl border border-white/10 bg-white/[0.03] p-5 shadow-2xl shadow-black/20 lg:flex-row lg:items-center lg:justify-between">
+            <div><p className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-300">Security command center</p><h1 className="mt-2 text-3xl font-black tracking-tight text-white">Auditoria minimalista com blueprint detalhado</h1><p className="mt-2 max-w-2xl text-sm text-slate-400">Cole arquivos do repositório, revise o mapa de superfície e execute uma análise estática para produzir plano de correção.</p></div>
+            <button onClick={handleRunAudit} disabled={isAnalyzing} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-black text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-300 disabled:opacity-60">{isAnalyzing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}Analisar todo o repositório</button>
+          </header>
+
+          {activeView === 'workbench' && <section className="grid gap-6 xl:grid-cols-[360px_1fr]">
+            <div className="space-y-4 rounded-3xl border border-white/10 bg-slate-900/70 p-5">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Projeto</label><input value={projectName} onChange={e => setProjectName(e.target.value)} className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
+              <div className="grid grid-cols-3 gap-3 pt-2"><Metric label="Arquivos" value={files.length} /><Metric label="Linhas" value={totalLines} /><Metric label="Regras" value={RULES_CATALOG.length} /></div>
+              <div className="pt-3"><div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Arquivos lidos</div><div className="space-y-2">{files.map(file => <button key={file.id} onClick={() => setActiveFileId(file.id)} className={`w-full rounded-2xl border p-3 text-left text-xs transition ${activeFile.id === file.id ? 'border-cyan-400/60 bg-cyan-400/10' : 'border-white/10 bg-slate-950 hover:bg-white/5'}`}><div className="font-mono text-slate-200">{file.path}</div><div className="mt-1 text-slate-500">{file.language} · {file.content.split('\n').length} linhas</div></button>)}</div></div>
+              <div className="flex gap-2 pt-2"><input value={newFilePath} onChange={e => setNewFilePath(e.target.value)} placeholder="src/api/file.ts" className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950 px-3 py-2 text-xs outline-none focus:border-cyan-400" /><button onClick={addRepositoryFile} className="rounded-2xl bg-white px-3 py-2 text-slate-950"><Plus className="h-4 w-4" /></button></div>
             </div>
-            <div id="user-avatar" className="h-9 w-9 rounded-full bg-blue-600/30 border border-blue-500/40 flex items-center justify-center text-blue-300 font-semibold text-sm">
-              SA
-            </div>
-          </div>
-        </div>
-      </header>
+            <div className="overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl"><div className="flex items-center justify-between border-b border-white/10 bg-slate-900/80 px-4 py-3 text-xs text-slate-400"><span className="flex items-center gap-2 font-mono"><Terminal className="h-4 w-4 text-cyan-300" />{activeFile.path}</span><span>{activeFile.language}</span></div><textarea value={activeFile.content} onChange={e => updateActiveFile(e.target.value)} rows={24} className="h-[580px] w-full resize-none bg-slate-950 p-5 font-mono text-sm leading-6 text-slate-200 outline-none" /></div>
+          </section>}
 
-      {/* Main Content Area */}
-      <main id="main-content" className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'audit' && (
-          <div id="audit-section" className="space-y-8">
-            {/* Input & Control Panel */}
-            <div id="audit-control-card" className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
-              <div id="audit-header-row" className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-                <div>
-                  <h1 id="audit-title" className="text-xl font-bold text-white flex items-center gap-2">
-                    <Terminal className="h-5 w-5 text-cyan-400" />
-                    Workbench de Auditoria de Código Fonte
-                  </h1>
-                  <p id="audit-subtitle" className="text-sm text-slate-400 mt-1">
-                    Análise estática OWASP R01-R10 e verificação de Race Conditions (CTF) para pré-produção.
-                  </p>
-                </div>
-                <div id="project-input-group" className="flex items-center gap-3 w-full sm:w-auto">
-                  <input
-                    id="project-name-input"
-                    type="text"
-                    value={projectName}
-                    onChange={e => setProjectName(e.target.value)}
-                    placeholder="Nome do Projeto ou Módulo"
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-full sm:w-64"
-                  />
-                  <button
-                    id="run-audit-btn"
-                    onClick={handleRunAudit}
-                    disabled={isAnalyzing || credits <= 0}
-                    className="flex items-center gap-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold px-5 py-2 rounded-xl text-sm transition-all shadow-lg shadow-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                  >
-                    {isAnalyzing ? (
-                      <>
-                        <RotateCcw className="h-4 w-4 animate-spin" />
-                        Auditando...
-                      </>
-                    ) : (
-                      <>
-                        <Play className="h-4 w-4 fill-current" />
-                        Executar Auditoria
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
+          {activeView === 'blueprint' && <section className="space-y-6">{report ? <><div className="grid gap-4 md:grid-cols-4"><Metric label="Score" value={`${report.score}/100`} /><Metric label="Nota" value={report.grade} /><Metric label="Findings" value={report.vulnerabilities.length} /><Metric label="Linhas" value={report.scannedLines} /></div><div className="rounded-3xl border border-white/10 bg-slate-900/70 p-6"><div className="flex flex-col justify-between gap-4 md:flex-row"><div><h2 className="text-xl font-black">Blueprint de remediação</h2><p className="mt-1 text-sm text-slate-400">{report.blueprint.summary}</p></div><div className="flex gap-2"><button onClick={exportBlueprint} className="rounded-2xl bg-slate-800 px-4 py-2 text-xs font-bold"><Download className="mr-2 inline h-4 w-4" />Markdown</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-800 px-4 py-2 text-xs font-bold"><Printer className="mr-2 inline h-4 w-4" />PDF</button></div></div><div className="mt-6 grid gap-4 lg:grid-cols-2"><Panel title="Arquitetura recomendada" items={report.blueprint.architectureNotes} /><Panel title="Plano prioritário" items={report.blueprint.priorityPlan} /></div></div><div className="flex flex-wrap gap-2">{['All', 'Critical', 'High', 'Medium', 'Low'].map(sev => <button key={sev} onClick={() => setSelectedSeverity(sev)} className={`rounded-full px-3 py-1 text-xs font-bold ${selectedSeverity === sev ? 'bg-cyan-400 text-slate-950' : 'bg-slate-900 text-slate-400'}`}>{sev === 'All' ? 'Todas' : sev}</button>)}</div><div className="space-y-3">{filteredVulnerabilities.map(v => <article key={v.id} className="rounded-3xl border border-white/10 bg-slate-900/70 p-5"><div className="flex flex-wrap items-center gap-3"><span className={`rounded-full px-2.5 py-1 text-[11px] font-black ring-1 ${severityStyles[v.severity]}`}>{v.severity}</span><h3 className="font-bold text-white">{v.title}</h3><span className="font-mono text-xs text-slate-500">{v.filePath}:{v.lineNumber}</span></div><p className="mt-3 text-sm text-slate-400">{v.description}</p><pre className="mt-4 overflow-x-auto rounded-2xl bg-slate-950 p-4 text-xs text-cyan-100"><code>{v.codeSnippet}</code></pre><p className="mt-4 text-sm text-slate-300"><b>Correção:</b> {v.remediation}</p></article>)}</div></> : <EmptyState />}</section>}
 
-              {/* Code Editor Box */}
-              <div id="code-editor-wrapper" className="relative rounded-xl border border-slate-800 bg-slate-950 overflow-hidden">
-                <div id="editor-header" className="bg-slate-900/80 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
-                  <div className="flex items-center gap-2">
-                    <FileCode className="h-4 w-4 text-cyan-400" />
-                    <span>app.js / server.ts</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span>Linguagem: Node.js / JavaScript / TypeScript</span>
-                    <button
-                      id="reset-code-btn"
-                      onClick={() => setCode(DEFAULT_SAMPLE_CODE)}
-                      className="hover:text-slate-200 transition-colors"
-                    >
-                      Restaurar Exemplo
-                    </button>
-                  </div>
-                </div>
-                <textarea
-                  id="code-input-textarea"
-                  value={code}
-                  onChange={e => setCode(e.target.value)}
-                  rows={14}
-                  className="w-full bg-slate-950 text-slate-200 font-mono text-sm p-4 focus:outline-none resize-y leading-relaxed border-none"
-                  placeholder="Cole aqui seu código-fonte para ser auditado..."
-                />
-              </div>
-            </div>
+          {activeView === 'repository' && <section className="rounded-3xl border border-white/10 bg-slate-900/70 p-6"><h2 className="text-xl font-black">Mapa do repositório</h2><div className="mt-5 grid gap-3">{(report?.blueprint.repositoryMap || files.map(f => ({ path: f.path, language: f.language, lines: f.content.split('\n').length, findings: 0 }))).map(file => <div key={file.path} className="grid gap-2 rounded-2xl border border-white/10 bg-slate-950 p-4 text-sm md:grid-cols-[1fr_120px_100px_120px]"><span className="font-mono text-slate-200">{file.path}</span><span className="text-slate-400">{file.language}</span><span className="text-slate-400">{file.lines} linhas</span><span className="font-bold text-cyan-300">{file.findings} findings</span></div>)}</div></section>}
 
-            {/* Audit Results Section */}
-            {report && (
-              <div id="report-results-container" className="space-y-8 animate-fadeIn">
-                {/* Executive Scorecard */}
-                <div id="scorecard-wrapper" className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                  <div id="score-card" className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
-                    <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Score de Segurança</span>
-                    <div className="my-4 flex items-baseline gap-3">
-                      <span className={`text-5xl font-black ${
-                        report.score >= 80 ? 'text-emerald-400' : report.score >= 60 ? 'text-amber-400' : 'text-red-400'
-                      }`}>
-                        {report.score}
-                      </span>
-                      <span className="text-slate-500 font-bold text-lg">/ 100</span>
-                      <span className={`ml-auto px-3 py-1 rounded-full text-xs font-extrabold ${
-                        report.grade === 'A' ? 'bg-emerald-500/20 text-emerald-300' :
-                        report.grade === 'B' ? 'bg-blue-500/20 text-blue-300' :
-                        report.grade === 'C' ? 'bg-amber-500/20 text-amber-300' : 'bg-red-500/20 text-red-300'
-                      }`}>
-                        Nota {report.grade}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400">Calculado via deduções OWASP/CTF estáticas.</p>
-                  </div>
-
-                  <div id="deploy-readiness-card" className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
-                    <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Status Pré-Produção</span>
-                    <div className="my-4">
-                      {report.readinessBlocker ? (
-                        <div className="flex items-center gap-3 text-red-400 font-bold text-lg">
-                          <XCircle className="h-7 w-7 text-red-400 shrink-0" />
-                          <span>BLOQUEADO PARA DEPLOY</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-3 text-emerald-400 font-bold text-lg">
-                          <CheckCircle2 className="h-7 w-7 text-emerald-400 shrink-0" />
-                          <span>APROVADO PARA PRODUÇÃO</span>
-                        </div>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      {report.readinessBlocker
-                        ? 'Existem falhas críticas ou nota abaixo de 70.'
-                        : 'Nenhuma vulnerabilidade impeditiva detectada.'}
-                    </p>
-                  </div>
-
-                  <div id="vuln-count-card" className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
-                    <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Falhas Encontradas</span>
-                    <div className="my-4">
-                      <span className="text-4xl font-bold text-white">{report.vulnerabilities.length}</span>
-                      <span className="text-slate-400 text-sm ml-2">vulnerabilidades</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-slate-400">
-                      <span className="text-red-400 font-semibold">{report.vulnerabilities.filter(v => v.severity === 'Critical').length} Críticas</span>
-                      <span>•</span>
-                      <span className="text-amber-400 font-semibold">{report.vulnerabilities.filter(v => v.severity === 'High').length} Altas</span>
-                    </div>
-                  </div>
-
-                  <div id="actions-card" className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
-                    <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Exportar Relatório</span>
-                    <div className="my-4 space-y-2">
-                      <button
-                        id="export-md-btn"
-                        onClick={handleExportMarkdown}
-                        className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 rounded-xl transition-colors"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        Exportar Markdown (.md)
-                      </button>
-                      <button
-                        id="print-pdf-btn"
-                        onClick={() => window.print()}
-                        className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 rounded-xl transition-colors"
-                      >
-                        <Printer className="h-3.5 w-3.5" />
-                        Imprimir / PDF Executivo
-                      </button>
-                    </div>
-                    <span className="text-[10px] text-slate-500 text-center">Formato de Blueprint Security Standard</span>
-                  </div>
-                </div>
-
-                {/* Report Filter & Toggle */}
-                <div id="report-controls-bar" className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-900/40 p-4 rounded-xl border border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400 font-medium">Filtrar Severidade:</span>
-                    {['All', 'Critical', 'High', 'Medium'].map(sev => (
-                      <button
-                        key={sev}
-                        id={`filter-sev-${sev.toLowerCase()}`}
-                        onClick={() => setSelectedSeverity(sev)}
-                        className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
-                          selectedSeverity === sev
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-950 text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        {sev === 'All' ? 'Todas' : sev}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <label className="text-xs text-slate-400 font-medium cursor-pointer flex items-center gap-2">
-                      <input
-                        id="non-technical-toggle"
-                        type="checkbox"
-                        checked={nonTechnicalMode}
-                        onChange={e => setNonTechnicalMode(e.target.checked)}
-                        className="rounded bg-slate-950 border-slate-800 text-cyan-500 focus:ring-0"
-                      />
-                      <span>Visão Executiva (Não-Técnica para Gestão)</span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Vulnerability List */}
-                <div id="vulnerabilities-list" className="space-y-4">
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <ShieldAlert className="h-5 w-5 text-amber-400" />
-                    Detalhamento de Inseguranças Encontradas ({filteredVulnerabilities.length})
-                  </h3>
-
-                  {filteredVulnerabilities.length === 0 ? (
-                    <div className="p-8 text-center bg-slate-900/40 rounded-2xl border border-slate-800 text-slate-400 text-sm">
-                      Nenhuma vulnerabilidade encontrada para o filtro selecionado.
-                    </div>
-                  ) : (
-                    filteredVulnerabilities.map(v => (
-                      <div
-                        key={v.id}
-                        id={`vuln-card-${v.id}`}
-                        className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-4 hover:border-slate-700 transition-all"
-                      >
-                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-4">
-                          <div className="flex items-center gap-3">
-                            <span className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase ${
-                              v.severity === 'Critical' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                              v.severity === 'High' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
-                              'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                            }`}>
-                              {v.severity}
-                            </span>
-                            <h4 className="font-bold text-white text-base">{v.title}</h4>
-                            <span className="text-xs font-mono text-slate-500">[{v.ruleId}]</span>
-                          </div>
-                          <span className="text-xs font-mono text-red-400 bg-red-950/40 px-2 py-1 rounded border border-red-900/40">
-                            -{v.penaltyPoints} pts no Score
-                          </span>
-                        </div>
-
-                        {nonTechnicalMode ? (
-                          <div className="p-4 rounded-xl bg-blue-950/30 border border-blue-900/30 text-blue-200 text-sm">
-                            <span className="font-bold block mb-1">Impacto no Negócio / Diretoria:</span>
-                            {v.executiveImpact}
-                          </div>
-                        ) : (
-                          <div className="space-y-3">
-                            <p className="text-sm text-slate-300 leading-relaxed">{v.description}</p>
-                            
-                            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-xs">
-                              <span className="text-slate-500 block mb-1">Linha {v.lineNumber}:</span>
-                              <code className="text-red-300">{v.codeSnippet}</code>
-                            </div>
-
-                            <div className="bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-900/40 text-xs">
-                              <span className="font-bold text-emerald-400 block mb-1">Plano de Remediação Recomendado:</span>
-                              <p className="text-emerald-200">{v.remediation}</p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* ASCII Security Blueprint */}
-                <div id="ascii-blueprint-box" className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-4">
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Lock className="h-5 w-5 text-cyan-400" />
-                    Security Blueprint & Architecture Flow
-                  </h3>
-                  <pre className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-slate-400 font-mono text-xs overflow-x-auto leading-normal">
-{`+-----------------------+      HTTPS / Bearer      +-----------------------+
-|  Cliente / Client App | -----------------------> | API Gateway / Router  |
-+-----------------------+                          +-----------------------+
-                                                               |
-                                                   [ Sanitize & Validate ]
-                                                               |
-                                                               v
-+-----------------------+      Param Query         +-----------------------+
-| Database / Persistence| <----------------------- | Secure Service Layer  |
-+-----------------------+                          +-----------------------+`}
-                  </pre>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Projects Tab */}
-        {activeTab === 'projects' && (
-          <div id="projects-section" className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-white">Portfólio de Projetos Auditados</h2>
-                <p className="text-sm text-slate-400 mt-1">Gerencie auditorias passadas e status de conformidade.</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {INITIAL_PROJECTS.map(proj => (
-                <div key={proj.id} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono text-cyan-400">{proj.language}</span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      proj.status === 'Clean' ? 'bg-emerald-500/20 text-emerald-300' :
-                      proj.status === 'Warning' ? 'bg-amber-500/20 text-amber-300' : 'bg-red-500/20 text-red-300'
-                    }`}>
-                      {proj.status}
-                    </span>
-                  </div>
-                  <h3 className="font-bold text-white text-lg">{proj.name}</h3>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-white">{proj.lastAuditScore}</span>
-                    <span className="text-xs text-slate-500">/ 100 Score</span>
-                  </div>
-                  <div className="border-t border-slate-800 pt-3 flex items-center justify-between text-xs text-slate-400">
-                    <span>Última auditoria: {proj.lastAuditDate}</span>
-                    <span className="text-slate-300 font-medium">{proj.vulnerabilitiesCount} falhas</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Catalog Tab */}
-        {activeTab === 'catalog' && (
-          <div id="catalog-section" className="space-y-6">
-            <div>
-              <h2 className="text-xl font-bold text-white">Catálogo de Regras SAST & OWASP</h2>
-              <p className="text-sm text-slate-400 mt-1">Regras ativas de verificação e cálculo de penalidades.</p>
-            </div>
-
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden">
-              <table className="w-full text-left text-sm text-slate-300">
-                <thead className="bg-slate-950 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                  <tr>
-                    <th className="p-4">ID Regra</th>
-                    <th className="p-4">Nome da Vulnerabilidade</th>
-                    <th className="p-4">Categoria</th>
-                    <th className="p-4">Severidade Padrão</th>
-                    <th className="p-4">Penalidade Score</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {RULES_CATALOG.map(rule => (
-                    <tr key={rule.id} className="hover:bg-slate-950/40">
-                      <td className="p-4 font-mono text-cyan-400 text-xs">{rule.id}</td>
-                      <td className="p-4 font-medium text-white">{rule.name}</td>
-                      <td className="p-4 text-slate-400">{rule.category}</td>
-                      <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                          rule.defaultSeverity === 'Critical' ? 'bg-red-500/20 text-red-400' :
-                          rule.defaultSeverity === 'High' ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'
-                        }`}>
-                          {rule.defaultSeverity}
-                        </span>
-                      </td>
-                      <td className="p-4 text-red-400 font-mono font-bold">-{rule.penalty} pts</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer id="main-footer" className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
-        <p>SecAudit Pro &copy; 2026. Plataforma de Auditoria Estática e Security Blueprints para Ambientes de Produção.</p>
-      </footer>
+          {activeView === 'rules' && <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{RULES_CATALOG.map(rule => <div key={rule.id} className="rounded-3xl border border-white/10 bg-slate-900/70 p-5"><div className="flex items-center justify-between"><span className="font-mono text-xs text-cyan-300">{rule.id}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ring-1 ${severityStyles[rule.defaultSeverity]}`}>{rule.defaultSeverity}</span></div><h3 className="mt-4 font-bold text-white">{rule.name}</h3><p className="mt-2 text-xs text-slate-500">{rule.category} · penalidade {rule.penalty} pts</p></div>)}</section>}
+        </main>
+      </div>
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div className="rounded-2xl border border-white/10 bg-slate-950/80 p-4"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</div><div className="mt-2 text-2xl font-black text-white">{value}</div></div>;
+}
+
+function Panel({ title, items }: { title: string; items: string[] }) {
+  return <div className="rounded-2xl border border-white/10 bg-slate-950 p-4"><h3 className="mb-3 text-sm font-black text-white">{title}</h3><ul className="space-y-2 text-sm text-slate-400">{items.map(item => <li key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />{item}</li>)}</ul></div>;
+}
+
+function EmptyState() {
+  return <div className="rounded-3xl border border-dashed border-white/10 bg-slate-900/50 p-12 text-center"><UploadCloud className="mx-auto h-10 w-10 text-slate-600" /><h2 className="mt-4 text-lg font-black text-white">Nenhum blueprint gerado ainda</h2><p className="mt-2 text-sm text-slate-400">Use “Analisar todo o repositório” para ler todos os arquivos adicionados e criar o blueprint.</p></div>;
 }
