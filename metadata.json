@@ -1,0 +1,6 @@
+{
+  "name": "SecAudit Pro",
+  "description": "Plataforma SaaS de auditoria de código-fonte, análise de regras OWASP e geração automatizada de Security Blueprints para pré-produção.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
